@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DDoS Traffic Checker</title>
+<style>
+  :root {
+    --page: #eef1f5; --field: #ffffff; --ink: #0e1b2c; --ink-2: #51607a; --line: #c9d2de;
+    --benign: #0b7a75; --ddos: #c2255c; --ml: #3b4cca; --lookup: #a86400;
+    /* The route band is a dark instrument strip in both themes */
+    --band: #0e1b2c; --band-ink: #eaf0f7; --band-ink-2: #9aa9be; --band-line: #2b3d55;
+    --b-benign: #3fd0c6; --b-ddos: #ff6b9a; --b-lit: #f2b544;
+    --display: Bahnschrift, "DIN Alternate", "Segoe UI", system-ui, sans-serif;
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0b1420; --field: #111e2e; --ink: #e6edf5; --ink-2: #93a1b5; --line: #26374d;
+      --benign: #3fd0c6; --ddos: #ff6b9a; --ml: #8e9bff; --lookup: #f2b544; --band: #101d2e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); line-height: 1.5; font-size: 15px; }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--ml); outline-offset: 2px; }
+  .band :focus-visible { outline-color: var(--b-lit); }
+
+  /* ============ ROUTE BAND: the result, drawn as the path the record took ============ */
+  .band { background: var(--band); color: var(--band-ink); border-bottom: 1px solid var(--band-line); }
+  .band-in { max-width: 1160px; margin: 0 auto; padding: 18px 20px 20px;
+    display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 28px; align-items: center; }
+  .product { font-family: var(--display); font-stretch: 85%; font-size: 14px; color: var(--band-ink-2); margin: 0; font-weight: 400; }
+  .verdict { font-family: var(--display); font-stretch: 80%; font-weight: 700; font-size: 44px; line-height: 1.02;
+    letter-spacing: -.01em; margin: 2px 0 6px; }
+  .band[data-state="idle"] .verdict { font-size: 30px; color: var(--band-ink); }
+  .band[data-state="Benign"] .verdict { color: var(--b-benign); }
+  .band[data-state="DDoS"] .verdict { color: var(--b-ddos); }
+  .facts { margin: 0; color: var(--band-ink-2); font-size: 13.5px; min-height: 20px; }
+  .facts span + span { margin-left: 14px; }
+  .truth { margin: 4px 0 0; font-weight: 600; font-size: 14px; min-height: 21px; }
+
+  .route { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .route li { position: relative; padding: 34px 16px 0 0; --c: var(--band-line); }
+  .route li::before { content: ""; position: absolute; top: 12px; left: 26px; right: 0; height: 2px;
+    background: var(--band-line); transform-origin: left; }
+  .route li:last-child::before { display: none; }
+  .node { position: absolute; top: 0; left: 0; width: 26px; height: 26px; border-radius: 50%;
+    border: 2px solid var(--c); background: var(--band); color: var(--band-ink-2);
+    font-family: var(--display); font-weight: 700; font-size: 14px; display: grid; place-items: center; }
+  .route b { display: block; font-family: var(--display); font-stretch: 90%; font-size: 17px; font-weight: 600; }
+  .route li > span:last-child { display: block; font-size: 13.5px; color: var(--band-ink-2); }
+  .route li.on { --c: var(--b-lit); }
+  .route li.on .node { background: var(--b-lit); color: var(--band); }
+  .route li.on::before, .route li.miss::before { background: var(--b-lit); }
+  .route li.miss { --c: var(--b-lit); }
+  .route li.miss .node { color: var(--b-lit); }
+  .route li.skip { opacity: .45; }
+  .route li.skip::before { background: repeating-linear-gradient(90deg, var(--b-lit) 0 6px, transparent 6px 12px); }
+  /* One moment of motion: the path draws itself after each check */
+  .route.run li::before { animation: draw .32s ease-out both; animation-delay: calc(var(--i) * .28s + .1s); }
+  .route.run .node, .route.run b, .route.run li > span:last-child { animation: arrive .25s ease-out both; animation-delay: calc(var(--i) * .28s); }
+  @keyframes draw { from { transform: scaleX(0); } }
+  @keyframes arrive { from { opacity: .15; } }
+  @media (prefers-reduced-motion: reduce) { .route.run * , .route.run li::before { animation: none; } }
+
+  @media (min-width: 861px) and (min-height: 640px) { .band { position: sticky; top: 0; z-index: 5; } }
+  @media (max-width: 860px) {
+    .band-in { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .verdict { font-size: 36px; }
+    .facts, .truth { min-height: 0; }
+    .route { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+    .route li { padding: 2px 0 0 38px; }
+    .route li::before { display: none; }
+  }
+
+  /* ============ PAGE ============ */
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 26px 20px 56px;
+    display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 40px; align-items: start; }
+  @media (max-width: 860px) { .wrap { grid-template-columns: minmax(0, 1fr); gap: 32px; } }
+  .live { border-left: 1px solid var(--line); padding-left: 40px; }
+  @media (max-width: 860px) { .live { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 24px; } }
+  h2 { font-family: var(--display); font-stretch: 85%; font-size: 24px; font-weight: 700; margin: 0 0 12px; }
+  h3 { font-size: 14px; font-weight: 600; color: var(--ink-2); margin: 22px 0 8px; }
+  .muted { color: var(--ink-2); }
+  .sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 22px 0 8px; }
+  .sec-head h3 { margin: 0; }
+
+  /* fill helpers */
+  .fill { display: flex; flex-wrap: wrap; gap: 6px; }
+  .fill button, .ghost { border: 1px solid var(--line); background: transparent; border-radius: 6px;
+    padding: 6px 12px; font-size: 14px; cursor: pointer; }
+  .fill button:hover, .ghost:hover { border-color: var(--ink-2); }
+  .real { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .real select { width: auto; flex: 1 1 200px; padding: 6px 10px; font-size: 14px; }
+  .note { display: none; margin-top: 10px; padding: 8px 12px; border-left: 3px solid var(--ml); background: var(--field); font-size: 14px; }
+
+  .nums { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 520px) { .nums { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .nums label { font-size: 13.5px; color: var(--ink-2); display: grid; gap: 4px; }
+  input[type=number], select { width: 100%; padding: 9px 10px; background: var(--field);
+    border: 1px solid var(--line); border-radius: 6px; font-variant-numeric: tabular-nums; }
+  .hint { font-size: 13px; color: var(--ink-2); margin-top: 6px; }
+
+  .chips { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  @media (max-width: 520px) { .chips { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .chip { text-align: center; padding: 8px 4px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+    font-family: var(--display); font-stretch: 90%; font-size: 15px; font-weight: 600; color: var(--ink-2); background: var(--field); }
+  .chip.on { background: var(--ink); border-color: var(--ink); color: var(--page); }
+  .chip.part { border-color: var(--ink); color: var(--ink); box-shadow: inset 0 -3px 0 var(--ink); }
+
+  .go { margin-top: 24px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .btn { padding: 12px 30px; border-radius: 6px; border: 0; background: var(--ml); color: #fff;
+    font-family: var(--display); font-size: 18px; font-weight: 700; cursor: pointer; }
+  @media (prefers-color-scheme: dark) { .btn { color: #0b1420; } }
+  .btn:disabled { opacity: .6; cursor: wait; }
+  .err { color: var(--ddos); font-size: 14px; flex-basis: 100%; min-height: 21px; }
+
+  /* live column */
+  .live-head { display: flex; align-items: baseline; gap: 10px; }
+  .live-head h2 { margin: 0; }
+  .live-head .ghost { margin-left: auto; }
+  .counts { display: flex; gap: 28px; margin-top: 14px; }
+  .counts .v { font-family: var(--display); font-stretch: 80%; font-size: 40px; font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums; }
+  .counts .l { font-size: 13px; color: var(--ink-2); }
+  .how { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: 14px; margin-bottom: 9px; }
+  .how b { font-variant-numeric: tabular-nums; }
+  .track { grid-column: 1 / -1; height: 5px; background: var(--line); }
+  .track i { display: block; height: 100%; width: 0; transition: width .3s; }
+  #bLearned { background: repeating-linear-gradient(90deg, var(--lookup) 0 5px, transparent 5px 9px); }
+  .list { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+  .list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
+  .list li:first-child { border-top: 0; }
+  .list .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list .hits { font-family: var(--display); font-weight: 700; font-variant-numeric: tabular-nums; min-width: 30px; }
+  .list .time { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .list .Benign { color: var(--benign); font-weight: 600; }
+  .list .DDoS { color: var(--ddos); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ============ RESULT: the route the record took ============ -->
+<section class="band" id="band" data-state="idle" aria-live="polite">
+  <div class="band-in">
+    <div>
+      <h1 class="product">DDoS traffic checker</h1>
+      <div class="verdict" id="verdict">Enter a record and check it</div>
+      <p class="facts" id="facts"></p>
+      <p class="truth" id="truth"></p>
+    </div>
+    <ol class="route" id="route">
+      <li id="s1" style="--i:0"><span class="node">1</span><b>Lookup first</b><span id="s1t"></span></li>
+      <li id="s2" style="--i:1"><span class="node">2</span><b>ML fallback</b><span id="s2t"></span></li>
+      <li id="s3" style="--i:2"><span class="node">3</span><b>Live frequency</b><span id="s3t"></span></li>
+    </ol>
+  </div>
+</section>
+
+<div class="wrap">
+  <!-- ============ INPUT ============ -->
+  <form id="form" autocomplete="off">
+    <h2>Traffic record</h2>
+    <div class="fill" id="examples"></div>
+    <div class="real">
+      <select id="source" aria-label="Dataset for the real row">
+        <option value="CICIoT2023|train">CICIoT2023, training split</option>
+        <option value="CICIoT2023|test">CICIoT2023, test split</option>
+        <option value="CICIoMT2024|test">CICIoMT2024, test files</option>
+      </select>
+      <button class="ghost" id="realBtn" type="button">Load a real row</button>
+    </div>
+    <div class="note" id="note"></div>
+
+    <div class="sec-head">
+      <h3>Protocol and packet size in bytes</h3>
+      <button class="ghost" id="random" type="button">🎲 Random values</button>
+    </div>
+    <div class="nums">
+      <label>Protocol Type
+        <input type="number" id="proto" min="0" step="any" list="protoList" required>
+        <datalist id="protoList">
+          <option value="6">TCP</option><option value="17">UDP</option>
+          <option value="1">ICMP</option><option value="2">IGMP</option>
+        </datalist>
+      </label>
+      <label>Min<input type="number" id="Min" min="0" step="any" required></label>
+      <label>Max<input type="number" id="Max" min="0" step="any" required></label>
+      <label>AVG<input type="number" id="AVG" min="0" step="any" required></label>
+    </div>
+    <div class="hint">Protocol Type: 6 is TCP, 17 is UDP, 1 is ICMP, 2 is IGMP.</div>
+
+    <h3>TCP flags that are set</h3>
+    <div class="chips" data-group="fin_flag_number:FIN,syn_flag_number:SYN,psh_flag_number:PSH,ack_flag_number:ACK,ece_flag_number:ECE,cwr_flag_number:CWR"></div>
+    <h3>Application protocol</h3>
+    <div class="chips" data-group="HTTP,DNS,Telnet,SMTP,SSH,IRC"></div>
+    <h3>Transport and network protocol</h3>
+    <div class="chips" data-group="TCP,UDP,DHCP,ARP,ICMP,IGMP"></div>
+
+    <div class="go">
+      <button class="btn" id="go" type="submit">Check record</button>
+      <button class="ghost" id="clear" type="button">Clear</button>
+      <span class="err" id="err" role="alert"></span>
+    </div>
+  </form>
+
+  <!-- ============ LIVE ============ -->
+  <div class="live">
+    <div class="live-head"><h2>Live frequency</h2>
+      <button class="ghost" id="reset" type="button">Reset</button></div>
+    <div class="counts">
+      <div><div class="v" id="kTotal">0</div><div class="l">Checks</div></div>
+      <div><div class="v" id="kBenign" style="color:var(--benign)">0</div><div class="l">Benign</div></div>
+      <div><div class="v" id="kDdos" style="color:var(--ddos)">0</div><div class="l">DDoS</div></div>
+    </div>
+
+    <h3>How the answers were found</h3>
+    <div class="how"><span>Lookup (training data)</span><b id="nLookup">0</b><div class="track"><i id="bLookup" style="background:var(--lookup)"></i></div></div>
+    <div class="how"><span>Lookup (learned from ML)</span><b id="nLearned">0</b><div class="track"><i id="bLearned"></i></div></div>
+    <div class="how"><span>ML fallback (XGBoost)</span><b id="nMl">0</b><div class="track"><i id="bMl" style="background:var(--ml)"></i></div></div>
+
+    <h3>Most frequent records</h3>
+    <ul class="list" id="top"></ul>
+    <h3>Latest checks</h3>
+    <ul class="list" id="recent"></ul>
+  </div>
+</div>
+
+<script>
+const FLAGS = [], $ = id => document.getElementById(id);
+// Illustrative traffic profiles for a quick start (not rows copied from the dataset)
+const EXAMPLES = {
+  "Web browsing": { proto: 6, on: ["ack_flag_number", "psh_flag_number", "TCP"], Min: 54, Max: 1514, AVG: 412.6 },
+  "DNS query": { proto: 17, on: ["DNS", "UDP"], Min: 74, Max: 190, AVG: 118.4 },
+  "SYN flood": { proto: 6, on: ["syn_flag_number", "TCP"], Min: 54, Max: 54, AVG: 54 },
+  "UDP flood": { proto: 17, on: ["UDP"], Min: 554, Max: 554, AVG: 554 },
+  "ICMP flood": { proto: 1, on: ["ICMP"], Min: 42, Max: 42, AVG: 42 },
+};
+
+// Build the 18 on/off chips
+document.querySelectorAll(".chips").forEach(box => {
+  box.dataset.group.split(",").forEach(item => {
+    const [name, text] = item.includes(":") ? item.split(":") : [item, item];
+    FLAGS.push(name);
+    const chip = document.createElement("button");
+    chip.type = "button"; chip.className = "chip"; chip.dataset.f = name; chip.dataset.text = text;
+    chip.onclick = () => setFlag(name, VAL[name] ? 0 : 1);
+    box.append(chip);
+  });
+});
+// Each chip holds a number: 0 = off, 1 = on, and real dataset rows can carry a fraction
+const VAL = {};
+function setFlag(name, v) {
+  const chip = document.querySelector(`[data-f="${name}"]`);
+  VAL[name] = v;
+  chip.className = "chip" + (v === 1 ? " on" : v ? " part" : "");
+  chip.textContent = chip.dataset.text + (v && v !== 1 ? " " + v : "");
+  chip.setAttribute("aria-pressed", v ? "true" : "false");
+}
+
+// The band before any check: what each of the three steps does
+let known = "the";
+function idle() {
+  $("band").dataset.state = "idle";
+  $("verdict").textContent = "Enter a record and check it";
+  $("facts").textContent = ""; $("truth").textContent = "";
+  ["s1", "s2", "s3"].forEach(id => $(id).className = "");
+  $("route").classList.remove("run");
+  $("s1t").textContent = `Search ${known} known records for an exact match.`;
+  $("s2t").textContent = "XGBoost classifies a record the lookup misses.";
+  $("s3t").textContent = "Count how many times the record was checked.";
+}
+
+let truth = null;  // true answer of a loaded real row, valid while the values stay unchanged
+function currentFeatures() {
+  const f = { "Protocol Type": $("proto").value, Min: $("Min").value, Max: $("Max").value, AVG: $("AVG").value };
+  FLAGS.forEach(k => f[k] = VAL[k]);
+  return f;
+}
+function fill(ex) {
+  $("proto").value = ex ? ex.proto : "";
+  ["Min", "Max", "AVG"].forEach(k => $(k).value = ex ? ex[k] : "");
+  FLAGS.forEach(f => setFlag(f, ex && ex.on.includes(f) ? 1 : 0));
+  truth = null; $("note").style.display = "none";
+  $("err").textContent = "";
+  idle();
+}
+
+$("realBtn").onclick = async () => {
+  const [dataset, split] = $("source").value.split("|");
+  try {
+    const res = await fetch(`/api/sample?dataset=${dataset}&split=${split}`);
+    const row = await res.json();
+    if (!res.ok) throw new Error(row.error);
+    fill(null);
+    $("proto").value = row.features["Protocol Type"];
+    ["Min", "Max", "AVG"].forEach(k => $(k).value = row.features[k]);
+    FLAGS.forEach(f => setFlag(f, row.features[f]));
+    truth = { label: row.label_name, snapshot: JSON.stringify(currentFeatures()) };
+    $("note").textContent = `Real row from ${row.dataset} (${row.type}). True answer: ${row.label_name}. Check the record to compare.`;
+    $("note").style.display = "block";
+  } catch (err) {
+    $("err").textContent = err.message || "The server did not answer. Make sure app.py is running.";
+  }
+};
+for (const [name, ex] of Object.entries(EXAMPLES)) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = name; b.onclick = () => fill(ex);
+  $("examples").append(b);
+}
+
+// Random but consistent record: the protocol chip matches Protocol Type and Min <= AVG <= Max
+const rnd = n => Math.floor(Math.random() * n);
+const pick = list => list[rnd(list.length)];
+$("random").onclick = () => {
+  const proto = pick([6, 6, 17, 17, 1, 2]);
+  const on = [{ 6: "TCP", 17: "UDP", 1: "ICMP", 2: "IGMP" }[proto]];
+  if (proto === 6) {
+    ["fin", "syn", "psh", "ack"].forEach(f => Math.random() < 0.4 && on.push(f + "_flag_number"));
+    if (Math.random() < 0.4) on.push(pick(["HTTP", "SSH", "Telnet", "SMTP", "IRC"]));
+  }
+  if (proto === 17 && Math.random() < 0.4) on.push("DNS");
+  const Min = 42 + rnd(500), Max = Min + rnd(1473 - Min);
+  const AVG = +(Min + Math.random() * (Max - Min)).toFixed(2);
+  fill({ proto, on, Min, Max, AVG });
+};
+
+// Default values shown when the page opens
+fill(EXAMPLES["Web browsing"]);
+$("clear").onclick = () => fill(null);
+
+function show(r) {
+  $("band").dataset.state = r.label_name;
+  $("verdict").textContent = r.label_name === "DDoS" ? "DDoS attack" : "Benign traffic";
+  $("facts").replaceChildren(...[`Confidence ${(100 * r.confidence).toFixed(2)}%`, `Answered in ${r.latency_ms} ms`]
+    .map(t => Object.assign(document.createElement("span"), { textContent: t })));
+  $("truth").textContent = !truth ? "" : truth.label === r.label_name
+    ? `✓ Correct. The dataset's true answer is ${truth.label}.`
+    : `✗ Wrong. The dataset's true answer is ${truth.label}.`;
+  const hit = r.route !== "ml";
+  $("s1").className = hit ? "on" : "miss";
+  $("s2").className = hit ? "skip" : "on";
+  $("s3").className = "on";
+  $("s1t").textContent = r.route === "lookup"
+    ? `Found in the CICIoT2023 training data (${r.benign_n.toLocaleString()}× Benign, ${r.ddos_n.toLocaleString()}× DDoS).`
+    : r.route === "learned" ? "Found. The model classified this record before and it was remembered."
+    : "Not found in the known records.";
+  $("s2t").textContent = hit ? "Skipped. The lookup already had the answer."
+    : `XGBoost classified it, P(DDoS) = ${r.p_ddos.toFixed(4)}. The answer is now remembered.`;
+  $("s3t").textContent = `This record has now been checked ${r.frequency} time${r.frequency === 1 ? "" : "s"}.`;
+  // Replay the path drawing
+  $("route").classList.remove("run"); void $("route").offsetWidth; $("route").classList.add("run");
+  if (getComputedStyle($("band")).position !== "sticky") $("band").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+$("form").onsubmit = async e => {
+  e.preventDefault();
+  const features = currentFeatures();
+  $("err").textContent = "";
+  // An edited real row is a new record, so its true answer no longer applies
+  if (truth && truth.snapshot !== JSON.stringify(features)) { truth = null; $("note").style.display = "none"; }
+  if (!truth && (+features.Min > +features.Max || +features.AVG < +features.Min || +features.AVG > +features.Max)) {
+    $("err").textContent = "Packet sizes must satisfy Min ≤ AVG ≤ Max. Fix the three sizes and check again.";
+    return;
+  }
+  $("go").disabled = true;
+  try {
+    const res = await fetch("/api/classify", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    show(data);
+    refresh();
+  } catch (err) {
+    $("err").textContent = err.message || "The server did not answer. Make sure app.py is running.";
+  } finally {
+    $("go").disabled = false;
+  }
+};
+
+// Short readable summary of a stored record
+function describe(v) {
+  const names = { 6: "TCP", 17: "UDP", 1: "ICMP", 2: "IGMP" };
+  const flags = ["fin", "syn", "psh", "ack", "ece", "cwr"].filter(f => v[f + "_flag_number"]).map(f => f.toUpperCase());
+  return [names[v["Protocol Type"]] || "Protocol " + v["Protocol Type"], flags.join("+"), `avg ${v.AVG} B`].filter(Boolean).join(", ");
+}
+const ROUTE = { lookup: "Lookup, training data", learned: "Lookup, learned from ML", ml: "ML fallback" };
+function item(parts) {
+  const li = document.createElement("li");
+  parts.forEach(([cls, text]) => { const s = document.createElement("span"); s.className = cls; s.textContent = text; li.append(s); });
+  return li;
+}
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/api/stats")).json(); } catch { return; }
+  if (known === "the") { known = s.known_records.toLocaleString(); if ($("band").dataset.state === "idle") idle(); }
+  $("kTotal").textContent = s.total; $("kBenign").textContent = s.labels.Benign; $("kDdos").textContent = s.labels.DDoS;
+  for (const [k, id] of [["lookup", "Lookup"], ["learned", "Learned"], ["ml", "Ml"]]) {
+    $("n" + id).textContent = s.routes[k];
+    $("b" + id).style.width = (s.total ? 100 * s.routes[k] / s.total : 0) + "%";
+  }
+  const empty = text => { const li = document.createElement("li"); li.className = "muted"; li.textContent = text; return li; };
+  $("top").replaceChildren(...(s.top.length ? s.top.map(t =>
+    item([["hits", t.hits + "×"], ["grow", describe(t.vector)], [t.label, t.label]])) : [empty("Check a record to start counting.")]));
+  $("recent").replaceChildren(...(s.recent.length ? s.recent.map(r =>
+    item([["time", new Date(r.ts * 1000).toLocaleTimeString()], ["grow", ROUTE[r.route]], [r.label, r.label]])) : [empty("No checks yet.")]));
+}
+$("reset").onclick = async () => {
+  if (!confirm("Clear all live counters and remembered ML answers?")) return;
+  await fetch("/api/reset", { method: "POST" });
+  refresh();
+};
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>
