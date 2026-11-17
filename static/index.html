@@ -179,17 +179,17 @@
     </div>
     <div class="nums">
       <label>Protocol Type
-        <input type="number" id="proto" min="0" step="any" list="protoList" required>
-        <datalist id="protoList">
+        <select id="proto" required>
+          <option value="" disabled hidden>Choose a protocol</option>
           <option value="6">TCP</option><option value="17">UDP</option>
           <option value="1">ICMP</option><option value="2">IGMP</option>
-        </datalist>
+          <option value="0">Other</option>
+        </select>
       </label>
       <label>Min<input type="number" id="Min" min="0" step="any" required></label>
       <label>Max<input type="number" id="Max" min="0" step="any" required></label>
       <label>AVG<input type="number" id="AVG" min="0" step="any" required></label>
     </div>
-    <div class="hint">Protocol Type: 6 is TCP, 17 is UDP, 1 is ICMP, 2 is IGMP.</div>
 
     <h3>TCP flags that are set</h3>
     <div class="chips" data-group="fin_flag_number:FIN,syn_flag_number:SYN,psh_flag_number:PSH,ack_flag_number:ACK,ece_flag_number:ECE,cwr_flag_number:CWR"></div>
@@ -278,8 +278,20 @@ function currentFeatures() {
   FLAGS.forEach(k => f[k] = VAL[k]);
   return f;
 }
+// Protocol Type is shown by name. A real row that mixes protocols carries their
+// average number (e.g. 16.89), so it gets its own "Mixed" option with that value.
+function setProto(v) {
+  const sel = $("proto"), s = v === "" ? "" : String(+v);
+  sel.querySelector(".mixed")?.remove();
+  if (s && ![...sel.options].some(o => o.value === s)) {
+    const opt = new Option(`Mixed protocols (avg ${s})`, s);
+    opt.className = "mixed";
+    sel.add(opt);
+  }
+  sel.value = s;
+}
 function fill(ex) {
-  $("proto").value = ex ? ex.proto : "";
+  setProto(ex ? ex.proto : "");
   ["Min", "Max", "AVG"].forEach(k => $(k).value = ex ? ex[k] : "");
   FLAGS.forEach(f => setFlag(f, ex && ex.on.includes(f) ? 1 : 0));
   truth = null; $("note").style.display = "none";
@@ -294,7 +306,7 @@ $("realBtn").onclick = async () => {
     const row = await res.json();
     if (!res.ok) throw new Error(row.error);
     fill(null);
-    $("proto").value = row.features["Protocol Type"];
+    setProto(row.features["Protocol Type"]);
     ["Min", "Max", "AVG"].forEach(k => $(k).value = row.features[k]);
     FLAGS.forEach(f => setFlag(f, row.features[f]));
     truth = { label: row.label_name, snapshot: JSON.stringify(currentFeatures()) };
